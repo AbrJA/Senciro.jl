@@ -2,6 +2,7 @@ module Senciro
 
 using Libdl
 using Base.Threads
+using PicoHTTPParser
 
 # Load the library
 const lib = "src/senciro.so"
@@ -95,19 +96,56 @@ function handle_event(engine, conn_ptr, res)
 
         # Check amount read
         bytes_read = res
+        # Validate bytes_read
         if bytes_read <= 0
             # EOF or Error, close
-            # close(conn_ref.fd) in C? We haven't exposed close.
-            # We should probably add a close helper or just use Julia's close(Base.Libc.FILE(fd))? No, raw fd.
             ccall(:close, Cint, (Cint,), conn_ref.fd)
             ccall((:free_connection, lib), Cvoid, (Ptr{Conn},), conn_ptr)
             return
         end
 
-        # Simple Logic: Parse -> Write Response
-        # In a real app we'd parse specific method/path
+        # Use PicoHTTPParser to parse the request
+        # We need to access the raw buffer from the pointer
+        # The buffer is at offset 8 in the struct (op_type(4) + fd(4))
+        buf_ptr = Ptr{UInt8}(conn_ptr) + 8
 
-        response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 12\r\n\r\nHello World!"
+        # We need to wrap this pointer in a Julia Vector or String to pass to PicoHTTPParser effectively,
+        # OR we can just read the data into a Julia Vector{UInt8} first.
+        # Doing a copy for safety and ease of use with PicoHTTPParser APIs which expect arrays.
+        # Since we have `bytes_read`, we can unsafe_wrap or copy.
+        # Let's copy to be safe and avoid lifetime issues with the struct vs julia gc.
+
+        raw_data = unsafe_wrap(Array, buf_ptr, bytes_read)
+
+        req = PicoHTTPParser.parse_request(raw_data)
+        method = req.method
+        path = req.path
+
+        response_body = ""
+        status_line = "HTTP/1.1 200 OK"
+
+        if method == "GET"
+            if path == "/"
+                response_body = "Welcome to Senciro!"
+            elseif path == "/hello"
+                response_body = "Hello from Senciro!"
+            else
+                status_line = "HTTP/1.1 404 Not Found"
+                response_body = "404 Not Found"
+            end
+        elseif method == "POST"
+            if path == "/submit"
+                response_body = "Submission Received!"
+            else
+                status_line = "HTTP/1.1 404 Not Found"
+                response_body = "404 Not Found"
+            end
+        else
+            status_line = "HTTP/1.1 405 Method Not Allowed"
+            response_body = "Method Not Allowed"
+        end
+
+        response = "$status_line\r\nContent-Type: text/plain\r\nContent-Length: $(length(response_body))\r\n\r\n$response_body"
 
         ccall((:queue_write, lib), Cvoid, (Ptr{Cvoid}, Ptr{Conn}, Cstring, Cint),
             engine, conn_ptr, response, length(response))
