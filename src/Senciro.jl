@@ -7,6 +7,26 @@ using PicoHTTPParser
 # Load the library
 const lib = "src/senciro.so"
 
+# Router implementation
+struct Router
+    routes::Dict{Tuple{String,String},Function}
+end
+
+const GLOBAL_ROUTER = Router(Dict{Tuple{String,String},Function}())
+
+function route(method::String, path::String, handler::Function)
+    GLOBAL_ROUTER.routes[(method, path)] = handler
+end
+
+# Support do-block syntax: Senciro.get("/path") do req ... end
+function get(handler::Function, path::String)
+    route("GET", path, handler)
+end
+
+function post(handler::Function, path::String)
+    route("POST", path, handler)
+end
+
 # Define the connection struct to match C
 mutable struct Conn
     op_type::Int32
@@ -78,7 +98,8 @@ function handle_event(engine, conn_ptr, res)
 
         # Transition current conn to READ
         conn_ref.fd = client_fd
-        unsafe_store!(conn_ptr, conn_ref) # Update struct memory
+        # Update struct memory
+        unsafe_store!(conn_ptr, conn_ref)
         ccall((:queue_read, lib), Cvoid, (Ptr{Cvoid}, Ptr{Conn}), engine, conn_ptr)
 
     elseif conn_ref.op_type == 1 # READ
@@ -124,25 +145,21 @@ function handle_event(engine, conn_ptr, res)
         response_body = ""
         status_line = "HTTP/1.1 200 OK"
 
-        if method == "GET"
-            if path == "/"
-                response_body = "Welcome to Senciro!"
-            elseif path == "/hello"
-                response_body = "Hello from Senciro!"
-            else
-                status_line = "HTTP/1.1 404 Not Found"
-                response_body = "404 Not Found"
-            end
-        elseif method == "POST"
-            if path == "/submit"
-                response_body = "Submission Received!"
-            else
-                status_line = "HTTP/1.1 404 Not Found"
-                response_body = "404 Not Found"
+        # Look up handler in Global Router
+        handler = Base.get(GLOBAL_ROUTER.routes, (method, path), nothing)
+
+        if handler !== nothing
+            try
+                response_body = handler(req)
+                status_line = "HTTP/1.1 200 OK"
+            catch e
+                @error "Handler execution failed" exception = (e, catch_backtrace())
+                status_line = "HTTP/1.1 500 Internal Server Error"
+                response_body = "Internal Server Error"
             end
         else
-            status_line = "HTTP/1.1 405 Method Not Allowed"
-            response_body = "Method Not Allowed"
+            status_line = "HTTP/1.1 404 Not Found"
+            response_body = "404 Not Found"
         end
 
         response = "$status_line\r\nContent-Type: text/plain\r\nContent-Length: $(length(response_body))\r\n\r\n$response_body"
