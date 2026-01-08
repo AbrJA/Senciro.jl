@@ -1,12 +1,13 @@
 name = "Senciro"
 uuid = "a5aa4c8c-878b-4250-8f20-feefce0a5039"
-authors = ["AbrJA <abraham.jaimes.mx@gmail.com>"]
 version = "0.1.0"
+authors = ["AbrJA <abraham.jaimes.mx@gmail.com>"]
 
 [deps]
 PicoHTTPParser = "7dfb699f-0de3-4c94-bc59-7670dfa845e2"
 
 [compat]
+PicoHTTPParser = "0.1"
 julia = "1"
 
 [extras]
