@@ -2,6 +2,7 @@ module Senciro
 
 # Include submodules
 include("types.jl")
+include("trie.jl")
 include("router.jl")
 include("server.jl")
 
@@ -9,19 +10,21 @@ include("server.jl")
 using .Types
 export Request, Response, json, text
 
-using .RouterMod
-# Explicitly use RouterMod.get to shadow Base.get in this module context if intended,
+using .Tries
+
+using .Routers
+# Explicitly use Routers.get to shadow Base.get in this module context if intended,
 # or just export it.
-# To avoid the warning "both RouterMod and Base export get", we need to be specific.
+# To avoid the warning "both Routers and Base export get", we need to be specific.
 # Since we want Senciro.get to be the router get, we should shadow it.
-const get = RouterMod.get
-const post = RouterMod.post
-const route = RouterMod.route
-const GLOBAL_ROUTER = RouterMod.GLOBAL_ROUTER
+const get = Routers.get
+const post = Routers.post
+const route = Routers.route
+const GLOBAL_ROUTER = Routers.GLOBAL_ROUTER
 
 export route, get, post, GLOBAL_ROUTER
 
-using .ServerMod
+using .Servers
 export start_server
 
 end

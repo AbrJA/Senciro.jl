@@ -18,9 +18,14 @@ Senciro.post("/data") do req::Senciro.Request
 end
 
 Senciro.get("/json") do req::Senciro.Request
+    # Test JSON serialization
     return Senciro.json(Dict("status" => "ok", "message" => "This is JSON"))
 end
 
-println("Routes registered: $(length(Senciro.GLOBAL_ROUTER.routes))")
+Senciro.get("/user/:id") do req::Senciro.Request
+    id = get(req.params, "id", "unknown")
+    return Senciro.json(Dict("user_id" => id))
+end
+
 println("Starting server on port 8080...")
 Senciro.start_server(8080)

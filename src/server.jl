@@ -1,10 +1,11 @@
-module ServerMod
+module Servers
 
 using Libdl
 using Base.Threads
 using PicoHTTPParser
 using ..Types
-using ..RouterMod: GLOBAL_ROUTER
+using ..Tries
+using ..Routers: GLOBAL_ROUTER
 
 export start_server
 
@@ -85,14 +86,16 @@ function handle_event(engine, conn_ptr, res)
             headers_dict[String(k)] = String(v)
         end
 
+        # Lookup in Tries extended with Method
+        handler, params = Tries.lookup(GLOBAL_ROUTER.trie, req_parsed.method, req_parsed.path)
+
         request = Request(
             req_parsed.method,
             req_parsed.path,
             headers_dict,
-            Vector{UInt8}() # Body parsing not yet implemented in PicoHTTPParser wrapper usage here, assuming just headers for now or empty body
+            Vector{UInt8}(), # Body parsing not yet implemented in PicoHTTPParser wrapper usage here
+            params
         )
-
-        handler = Base.get(GLOBAL_ROUTER.routes, (request.method, request.path), nothing)
 
         response = nothing
         if handler !== nothing
@@ -107,7 +110,7 @@ function handle_event(engine, conn_ptr, res)
                 end
             catch e
                 @error "Handler failed" exception = (e, catch_backtrace())
-                response = Response(500, "Internal Server Error")
+                response = Response(500, "Internal Servers Error")
             end
         else
             response = Response(404, "Not Found")
@@ -148,8 +151,23 @@ function handle_event(engine, conn_ptr, res)
             engine, conn_ptr, buf_ptr, length(resp_bytes))
 
     elseif conn_ref.op_type == 2 # WRITE
-        ccall(:close, Cint, (Cint,), conn_ref.fd)
-        ccall((:free_connection, lib), Cvoid, (Ptr{Conn},), conn_ptr)
+        # Check for Keep-Alive
+        # Ideally we check the Request header or Response headers we just sent
+        # But here we just have the low level op.
+        # For HTTP/1.1 default is Keep-Alive.
+        # We should check if we should close.
+        # For simplicity in this step, let's implement persistent connection by default.
+        # We re-queue a READ on the same fd.
+
+        # Reset OP to READ (1)
+        conn_ref.op_type = 1
+        unsafe_store!(conn_ptr, conn_ref)
+
+        # Re-queue read to wait for next request
+        ccall((:queue_read, lib), Cvoid, (Ptr{Cvoid}, Ptr{Conn}), engine, conn_ptr)
+
+        # Note: In a real server we need to handle timeouts and 'Connection: close' header logic.
+        # This assumes infinite keep-alive for now.
     end
 end
 

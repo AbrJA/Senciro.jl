@@ -4,13 +4,16 @@ authors = ["AbrJA <abraham.jaimes.mx@gmail.com>"]
 version = "0.1.0"
 
 [deps]
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
 PicoHTTPParser = "7dfb699f-0de3-4c94-bc59-7670dfa845e2"
 
 [compat]
 julia = "1"
 
 [extras]
+HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test"]
+test = ["Test", "HTTP"]

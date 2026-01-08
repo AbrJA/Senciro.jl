@@ -1,17 +1,18 @@
-module RouterMod
+module Routers
 
 using ..Types
+using ..Tries
 
 export Router, GLOBAL_ROUTER, route, get, post
 
 struct Router
-    routes::Dict{Tuple{String,String},Function}
+    trie::RadixTrie
 end
 
-const GLOBAL_ROUTER = Router(Dict{Tuple{String,String},Function}())
+const GLOBAL_ROUTER = Router(RadixTrie())
 
 function route(method::String, path::String, handler::Function)
-    GLOBAL_ROUTER.routes[(method, path)] = handler
+    Tries.insert!(GLOBAL_ROUTER.trie, method, path, handler)
 end
 
 function get(handler::Function, path::String)
