@@ -3,13 +3,18 @@ module Routers
 using ..Types
 using ..Tries
 
-export Router, GLOBAL_ROUTER, route, get, post
+export Router, GLOBAL_ROUTER, route, get, post, use
 
 struct Router
     trie::RadixTrie
+    middlewares::Vector{Function}
 end
 
-const GLOBAL_ROUTER = Router(RadixTrie())
+const GLOBAL_ROUTER = Router(RadixTrie(), Function[])
+
+function use(middleware::Function)
+    push!(GLOBAL_ROUTER.middlewares, middleware)
+end
 
 function route(method::String, path::String, handler::Function)
     Tries.insert!(GLOBAL_ROUTER.trie, method, path, handler)

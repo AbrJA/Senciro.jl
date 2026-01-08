@@ -5,6 +5,9 @@ using .Senciro
 
 println("Setting up routes...")
 
+# Use Middleware
+Senciro.use(Senciro.Logger)
+
 Senciro.get("/") do req::Senciro.Request
     return Senciro.text("Welcome to the User Defined Router!")
 end
@@ -12,6 +15,13 @@ end
 Senciro.get("/hello") do req::Senciro.Request
     return Senciro.text("Hello from the new API!")
 end
+
+Senciro.get("/large") do req::Senciro.Request
+    # Test Zero-Copy with 5MB payload
+    data = repeat("A", 5 * 1024 * 1024)
+    return Senciro.text(data)
+end
+
 
 Senciro.post("/data") do req::Senciro.Request
     return Senciro.text("Data received!")

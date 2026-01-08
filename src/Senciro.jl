@@ -3,6 +3,7 @@ module Senciro
 # Include submodules
 include("types.jl")
 include("trie.jl")
+include("middleware.jl")
 include("router.jl")
 include("server.jl")
 
@@ -11,6 +12,8 @@ using .Types
 export Request, Response, json, text
 
 using .Tries
+using .Middlewares
+export Logger
 
 using .Routers
 # Explicitly use Routers.get to shadow Base.get in this module context if intended,
@@ -20,9 +23,10 @@ using .Routers
 const get = Routers.get
 const post = Routers.post
 const route = Routers.route
+const use = Routers.use
 const GLOBAL_ROUTER = Routers.GLOBAL_ROUTER
 
-export route, get, post, GLOBAL_ROUTER
+export route, get, post, use, GLOBAL_ROUTER
 
 using .Servers
 export start_server

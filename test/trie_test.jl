@@ -1,7 +1,7 @@
 using Test
 using Senciro.Tries
 
-@testset "Radix Tries Tests" begin
+@testset "Radix Trie Tests" begin
     trie = RadixTrie()
 
     # 1. Static Routes
@@ -32,10 +32,6 @@ using Senciro.Tries
     @test p["id"] == "123"
 
     # Priority check: Static > Param?
-    # Our impl checks static first then param in separate loops.
-    # insert!(trie, "GET", "/user/special", ...) -> should match static "special" if exists, else match :id="special"
-    # Let's verify priority.
-
     handler_special = () -> "special"
     insert!(trie, "GET", "/user/special", handler_special)
 

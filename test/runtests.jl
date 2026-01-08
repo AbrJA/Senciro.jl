@@ -14,11 +14,6 @@ include("types_test.jl")
     end
 
     Senciro.post("/echo") do req
-        return Senciro.text(String(req.body)) # Echo body? (Parsing not full yet, body is vec uint8)
-        # Note: server.jl doesn't read body fully yet for POST?
-        # Actually server.jl: "Body parsing not yet implemented... Vector{UInt8}()"
-        # So request body will be empty for now.
-        # Let's skip body echo test for now or fix server.jl
         return Senciro.text("received")
     end
 
@@ -26,7 +21,7 @@ include("types_test.jl")
         return Senciro.json(Dict("val" => 123))
     end
 
-    # Start Servers in background
+    # Start Server in background
     port = 9090
     server_task = Threads.@spawn Senciro.start_server(port)
 
@@ -42,7 +37,6 @@ include("types_test.jl")
         # 2. POST /echo
         r = HTTP.post("http://localhost:$port/echo", body="payload")
         @test r.status == 200
-        # @test String(r.body) == "received"
 
         # 3. JSON
         r = HTTP.get("http://localhost:$port/json_test")
