@@ -90,7 +90,7 @@ void queue_accept(struct engine_state* state, conn_t* conn) {
 
     io_uring_prep_accept(sqe, state->server_fd, (struct sockaddr*)&conn->addr, &conn->addr_len, 0);
     io_uring_sqe_set_data(sqe, conn);
-    io_uring_submit(&state->ring);
+    // Submit deferred
 }
 
 // Queue a read request
@@ -100,7 +100,7 @@ void queue_read(struct engine_state* state, conn_t* conn) {
     // Read into standard buffer
     io_uring_prep_read(sqe, conn->fd, conn->buffer, BUFFER_SIZE - 1, 0);
     io_uring_sqe_set_data(sqe, conn);
-    io_uring_submit(&state->ring);
+    // Submit deferred
 }
 
 // Queue a write request
@@ -112,13 +112,13 @@ void queue_write(struct engine_state* state, conn_t* conn, const char* data, int
     // We do NOT copy to conn->buffer.
     io_uring_prep_write(sqe, conn->fd, data, len, 0);
     io_uring_sqe_set_data(sqe, conn);
-    io_uring_submit(&state->ring);
+    // io_uring_submit implicitly deferred to wait_for_completion
 }
 
 // Non-blocking check for completions
 conn_t* poll_completion(struct engine_state* state, int* res) {
+    // Only peek CQ, do NOT submit.
     struct io_uring_cqe *cqe;
-    // Peek instead of wait so we don't block the Julia thread (unless we want to)
     int ret = io_uring_peek_cqe(&state->ring, &cqe);
     if (ret < 0) return NULL;
 
@@ -129,11 +129,16 @@ conn_t* poll_completion(struct engine_state* state, int* res) {
     return conn;
 }
 
-// Blocking wait for completions
+// Blocking wait (and submit) for completions
 conn_t* wait_for_completion(struct engine_state* state, int* res) {
     struct io_uring_cqe *cqe;
-    // Wait for at least 1 event
-    int ret = io_uring_wait_cqe(&state->ring, &cqe);
+
+    // Submit any pending requests and wait for at least 1 completion event
+    int ret = io_uring_submit_and_wait(&state->ring, 1);
+    if (ret < 0) return NULL;
+
+    // After returning from wait, we should have a CQE ready
+    ret = io_uring_peek_cqe(&state->ring, &cqe);
     if (ret < 0) return NULL;
 
     conn_t* conn = (conn_t*)io_uring_cqe_get_data(cqe);

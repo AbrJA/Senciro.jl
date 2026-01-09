@@ -9,7 +9,7 @@ include("types_test.jl")
 
 @testset "Integration Tests" begin
     # Start Server in background process
-    port = 9095
+    port = 9096
     server_code = """
     using Senciro
 
@@ -22,6 +22,11 @@ include("types_test.jl")
     end
     Senciro.get(router, "/json_test") do req
         return Senciro.json(Dict("val" => 123))
+    end
+    Senciro.get(router, "/large") do req
+        # 5MB payload
+        data = repeat("A", 5 * 1024 * 1024)
+        return Senciro.text(data)
     end
 
     Senciro.start_server(router, $port)
@@ -47,7 +52,12 @@ include("types_test.jl")
         @test r.status == 200
         @test HTTP.header(r, "Content-Type") == "application/json"
 
-        # 4. 404
+        # 4. Large Payload
+        r = HTTP.get("http://localhost:$port/large")
+        @test r.status == 200
+        @test length(r.body) == 5 * 1024 * 1024
+
+        # 5. 404
         @test_throws HTTP.ExceptionRequest.StatusError HTTP.get("http://localhost:$port/missing")
 
     finally

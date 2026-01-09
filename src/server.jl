@@ -53,13 +53,24 @@ function worker_loop(router, port, thread_id)
 
     while SERVER_RUNNING[]
         res = Ref{Cint}(0)
-        # Use wait_for_completion to block properly
+
+        # 1. Drain the Completion Queue (Processing Batch)
+        # We loop peeking until no more events are ready immediately
+        while true
+            conn_ptr = ccall((:poll_completion, lib), Ptr{Conn}, (Ptr{Cvoid}, Ref{Cint}), engine, res)
+            if conn_ptr == C_NULL
+                break
+            end
+            handle_event(engine, router, conn_ptr, res[])
+        end
+
+        # 2. Wait for more events (and Submit any pending SQEs)
+        # implementation of wait_for_completion in C now does io_uring_submit_and_wait
         conn_ptr = ccall((:wait_for_completion, lib), Ptr{Conn}, (Ptr{Cvoid}, Ref{Cint}), engine, res)
 
         if conn_ptr != C_NULL
             handle_event(engine, router, conn_ptr, res[])
         end
-        # yield() # Not strictly needed if blocking in C, but harmless
     end
 
     println("  [Thread $thread_id] Exiting loop")
