@@ -24,9 +24,9 @@ const get = Routers.get
 const post = Routers.post
 const route = Routers.route
 const use = Routers.use
-const GLOBAL_ROUTER = Routers.GLOBAL_ROUTER
+const Router = Routers.Router
 
-export route, get, post, use, GLOBAL_ROUTER
+export Router, route, get, post, use
 
 using .Servers
 export start_server

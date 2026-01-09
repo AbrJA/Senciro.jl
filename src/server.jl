@@ -5,7 +5,7 @@ using Base.Threads
 using PicoHTTPParser
 using ..Types
 using ..Tries
-using ..Routers: GLOBAL_ROUTER
+using ..Routers: Router
 
 export start_server, stop_server
 
@@ -22,17 +22,13 @@ mutable struct Conn
     _padding::NTuple{32,UInt8}
 end
 
-function start_server(port=8080)
-    println("🚀 Julia io_uring backend starting on port $port with $(Threads.nthreads()) threads")
+function start_server(router::Router, port=8080, nthreads=Threads.nthreads())
+    println("🚀 Julia io_uring backend starting on port $port with $nthreads threads")
     atomic_xchg!(SERVER_RUNNING, true)
 
-    # Disable default sigint handling so we can catch it
-    # Base.exit_on_sigint(false)
-    # Actually, better to just let user handle it or use a task.
-    # For production lib, we can setup a handler.
     try
-        @threads for i in 1:Threads.nthreads()
-            worker_loop(port, i)
+        @threads for i in 1:nthreads
+            worker_loop(router, port, i)
         end
     catch e
         if e isa InterruptException
@@ -46,10 +42,9 @@ end
 
 function stop_server()
     atomic_xchg!(SERVER_RUNNING, false)
-    # Ideally trigger wakeups on rings, but polling loops check this flag.
 end
 
-function worker_loop(port, thread_id)
+function worker_loop(router, port, thread_id)
     engine = ccall((:init_engine, lib), Ptr{Cvoid}, (Cint, Cint), port, 4096)
     println("  [Thread $thread_id] Engine initialized")
 
@@ -58,21 +53,19 @@ function worker_loop(port, thread_id)
 
     while SERVER_RUNNING[]
         res = Ref{Cint}(0)
-        # Block for completion? If blocking, we can't check flag easily except on wakeup.
-        # But we yield.
-        # Ideally use a timeout to poll.
-        conn_ptr = ccall((:poll_completion, lib), Ptr{Conn}, (Ptr{Cvoid}, Ref{Cint}), engine, res)
+        # Use wait_for_completion to block properly
+        conn_ptr = ccall((:wait_for_completion, lib), Ptr{Conn}, (Ptr{Cvoid}, Ref{Cint}), engine, res)
 
         if conn_ptr != C_NULL
-            handle_event(engine, conn_ptr, res[])
+            handle_event(engine, router, conn_ptr, res[])
         end
-        yield()
+        # yield() # Not strictly needed if blocking in C, but harmless
     end
 
     println("  [Thread $thread_id] Exiting loop")
 end
 
-function handle_event(engine, conn_ptr, res)
+function handle_event(engine, router, conn_ptr, res)
     conn_ref = unsafe_load(conn_ptr)
 
     if res < 0
@@ -106,7 +99,19 @@ function handle_event(engine, conn_ptr, res)
         raw_data = unsafe_wrap(Array, buf_ptr, bytes_read)
 
         # Parse Request
-        req_parsed = PicoHTTPParser.parse_request(raw_data)
+        local req_parsed
+        try
+            req_parsed = PicoHTTPParser.parse_request(raw_data)
+        catch e
+            @error "Failed to parse request" exception = (e, catch_backtrace())
+            # Close connection if parsing fails (for now)
+            # Or send 400?
+            # To send 400 we need to write... but we are in READ state.
+            # Simplified: just close.
+            ccall(:close, Cint, (Cint,), conn_ref.fd)
+            ccall((:free_connection, lib), Cvoid, (Ptr{Conn},), conn_ptr)
+            return
+        end
 
         # Construct Request Object
         headers_dict = Dict{String,String}()
@@ -114,7 +119,7 @@ function handle_event(engine, conn_ptr, res)
             headers_dict[String(k)] = String(v)
         end
 
-        handler, params = Tries.lookup(GLOBAL_ROUTER.trie, req_parsed.method, req_parsed.path)
+        handler, params = Tries.lookup(router.trie, req_parsed.method, req_parsed.path)
 
         request = Request(
             req_parsed.method,
@@ -128,7 +133,7 @@ function handle_event(engine, conn_ptr, res)
         if handler !== nothing
             # Apply Middlewares
             final_handler = handler
-            for mw in reverse(GLOBAL_ROUTER.middlewares)
+            for mw in reverse(router.middlewares)
                 final_handler = mw(final_handler)
             end
 
@@ -162,85 +167,52 @@ function handle_event(engine, conn_ptr, res)
         head_bytes = Vector{UInt8}("$status_line\r\n$header_lines\r\n")
 
         # Full payload = Headers + Body
-        # We want to send this via queue_write without copying to the fixed buffer if possible,
-        # OR just copy if small.
-        # But to fix 2KB limit, we just malloc/use Julia array pointer?
-
-        # ZERO-COPY Strategy:
-        # We need to construct a single buffer or using iovec (vectored I/O).
-        # Our C 'queue_write' takes (buf, len).
-        # We should concatenate headers + body into a single Julia Vector{UInt8}.
-
+        # Zero-Copy Strategy:
+        # We concatenate headers + body into a single Julia Vector{UInt8}.
         full_response = vcat(head_bytes, response.body)
 
-        # To use Zero-Copy safe with Julia GC:
-        # We use GC.@preserve around the ccall.
-        # BUT ccall is async! The C function returns immediately but the I/O happens later.
-        # GC.@preserve only protects during the block.
-        # So we absolutely CANNOT just return.
-
-        # Wait, liburing I/O is async.
-        # Making it safe without copying to a C-owned buffer means we must ROOT the julia object
-        # until the COMPLETION event comes back.
-
-        # For this iteration, to be safe and production ready without complex object pooling/rooting maps:
-        # We will use Libc.malloc to allocate a C buffer, copy data there, pass it to C,
-        # and free it in the WRITE callback.
-        # This is "Zero-Copy" from Julia's GC perspective (no heap corruption risk),
-        # but technically one copy to C heap.
-        # It removes the 2KB limit.
-        # True Zero-Copy requires pinning pages or rigorous object lifecycle tracking which is complex for now.
-
-        # Allocate C buffer
+        # We anchor the data so GC doesn't collect it while C is reading it
+        # Store (data, offset) where offset is 0 initially
+        PENDING_WRITES[conn_ptr] = (full_response, 0)
         len = length(full_response)
-        c_buf = Libc.malloc(len)
-        unsafe_copyto!(Ptr{UInt8}(c_buf), pointer(full_response), len)
 
-        # We need to store this pointer so we can free it later!
-        # Where? Conn struct?
-        # We can add a field to Conn struct. Or simpler:
-        # repurpose 'buffer' field? No it's fixed size.
-        # We can treat the 'buffer' as a place to store the pointer if we cast?
-        # Better: Modify Conn struct in C?
-        # OR: Just for now, we allocate, and let it leak? NO.
-        # We need to free it.
-
-        # Hack for this step:
-        # We will copy to the 2KB buffer if it fits.
-        # If > 2KB, we truncate (as before) OR we implement the malloc strategy.
-        # Let's try the malloc strategy by using the `cookie` or user_data in io_uring?
-        # Our C wrapper doesn't expose it easily.
-
-        # Let's stick to the easiest reliable fix:
-        # Improve the C-side or just accept copy for now but increase buffer size?
-        # User asked for "Zero-copy writes using GC.@preserve".
-        # This implies they think we can just pass the pointer.
-        # If we pass pointer, we MUST block until done or preserve.
-        # Blocking defeats async.
-
-        # Re-evaluating: Pure Zero-Copy in async Julia requires manual GC interaction involving `jl_gc_add_ptr_finalizer`
-        # or a global Dict anchor.
-
-        # Let's implement the Global Anchor strategy.
-        # We need a unique ID for the connection/request. `conn_ptr` is good.
-
-        PENDING_WRITES[conn_ptr] = full_response
-
-        # Pass pointer to internal data
         ccall((:queue_write, lib), Cvoid, (Ptr{Cvoid}, Ptr{Conn}, Ptr{UInt8}, Cint),
             engine, conn_ptr, pointer(full_response), len)
 
-        # In WRITE completion, we remove from PENDING_WRITES.
-
     elseif conn_ref.op_type == 2 # WRITE
         # Completion of Write
+        bytes_written = res
 
-        # Remove protection
-        if haskey(PENDING_WRITES, conn_ptr)
+        if bytes_written < 0
+            # Error handling
             delete!(PENDING_WRITES, conn_ptr)
+            ccall(:close, Cint, (Cint,), conn_ref.fd)
+            ccall((:free_connection, lib), Cvoid, (Ptr{Conn},), conn_ptr)
+            return
         end
 
-        # Check for Keep-Alive (Same as before)
+        if haskey(PENDING_WRITES, conn_ptr)
+            (data, offset) = PENDING_WRITES[conn_ptr]
+            new_offset = offset + bytes_written
+
+            if new_offset < length(data)
+                # Partial write, queue remainder
+                PENDING_WRITES[conn_ptr] = (data, new_offset)
+                remaining_len = length(data) - new_offset
+
+                # println("Partial write: $bytes_written bytes. Remaining: $remaining_len")
+
+                ccall((:queue_write, lib), Cvoid, (Ptr{Cvoid}, Ptr{Conn}, Ptr{UInt8}, Cint),
+                    engine, conn_ptr, pointer(data) + new_offset, remaining_len)
+                return
+            else
+                # Done
+                delete!(PENDING_WRITES, conn_ptr)
+            end
+        end
+
+        # Check for Keep-Alive (optional, for now simple implementation)
+        # We just loop back to read
         conn_ref.op_type = 1
         unsafe_store!(conn_ptr, conn_ref)
         ccall((:queue_read, lib), Cvoid, (Ptr{Cvoid}, Ptr{Conn}), engine, conn_ptr)
@@ -248,6 +220,7 @@ function handle_event(engine, conn_ptr, res)
 end
 
 # Anchor for Async Writes
-const PENDING_WRITES = Dict{Ptr{Conn},Vector{UInt8}}()
+# Key is the connection pointer, Value is (Data, Offset)
+const PENDING_WRITES = Dict{Ptr{Conn},Tuple{Vector{UInt8},Int}}()
 
 end

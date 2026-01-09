@@ -108,13 +108,9 @@ void queue_write(struct engine_state* state, conn_t* conn, const char* data, int
     struct io_uring_sqe *sqe = io_uring_get_sqe(&state->ring);
     conn->type = WRITE;
 
-    // For simplicity, we copy data to buffer if needed, OR we can use the pointer passed if it persists
-    // Here we assume 'data' is safe or we copy it to conn->buffer if we want full async safety without managing external buffers
-    // Let's use conn->buffer for safety in this simple version
-    if (len > BUFFER_SIZE) len = BUFFER_SIZE;
-    memcpy(conn->buffer, data, len);
-
-    io_uring_prep_write(sqe, conn->fd, conn->buffer, len, 0);
+    // Zero-Copy: We trust the caller (Julia) to keep 'data' valid until completion.
+    // We do NOT copy to conn->buffer.
+    io_uring_prep_write(sqe, conn->fd, data, len, 0);
     io_uring_sqe_set_data(sqe, conn);
     io_uring_submit(&state->ring);
 }
@@ -122,8 +118,22 @@ void queue_write(struct engine_state* state, conn_t* conn, const char* data, int
 // Non-blocking check for completions
 conn_t* poll_completion(struct engine_state* state, int* res) {
     struct io_uring_cqe *cqe;
-    // Peek instead of wait so we don't block the Julia thread
+    // Peek instead of wait so we don't block the Julia thread (unless we want to)
     int ret = io_uring_peek_cqe(&state->ring, &cqe);
+    if (ret < 0) return NULL;
+
+    conn_t* conn = (conn_t*)io_uring_cqe_get_data(cqe);
+    *res = cqe->res;
+
+    io_uring_cqe_seen(&state->ring, cqe);
+    return conn;
+}
+
+// Blocking wait for completions
+conn_t* wait_for_completion(struct engine_state* state, int* res) {
+    struct io_uring_cqe *cqe;
+    // Wait for at least 1 event
+    int ret = io_uring_wait_cqe(&state->ring, &cqe);
     if (ret < 0) return NULL;
 
     conn_t* conn = (conn_t*)io_uring_cqe_get_data(cqe);

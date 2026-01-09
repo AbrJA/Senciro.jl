@@ -1,32 +1,36 @@
 using Test
 using Senciro
 using HTTP
-using Senciro.Routers # Access GLOBAL_ROUTER for cleanup/setup
+using Senciro.Routers
 
 # Include Unit Tests
 include("trie_test.jl")
 include("types_test.jl")
 
 @testset "Integration Tests" begin
-    # Setup Router
-    Senciro.get("/test") do req
+    # Start Server in background process
+    port = 9095
+    server_code = """
+    using Senciro
+
+    router = Senciro.Router()
+    Senciro.get(router, "/test") do req
         return Senciro.text("ok")
     end
-
-    Senciro.post("/echo") do req
+    Senciro.post(router, "/echo") do req
         return Senciro.text("received")
     end
-
-    Senciro.get("/json_test") do req
+    Senciro.get(router, "/json_test") do req
         return Senciro.json(Dict("val" => 123))
     end
 
-    # Start Server in background
-    port = 9090
-    server_task = Threads.@spawn Senciro.start_server(port)
+    Senciro.start_server(router, $port)
+    """
+
+    server_process = run(pipeline(`$(Base.julia_cmd()) --project=. -e $server_code`, stdout=stdout, stderr=stderr), wait=false)
 
     # Wait for server startup
-    sleep(1.0)
+    sleep(3.0)
 
     try
         # 1. GET /test
