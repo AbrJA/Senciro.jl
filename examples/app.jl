@@ -6,7 +6,7 @@ using .Senciro
 println("Setting up routes...")
 
 # Use Middleware
-Senciro.use(Senciro.Logger)
+#Senciro.use(Senciro.Logger)
 
 Senciro.get("/") do req::Senciro.Request
     return Senciro.text("Welcome to the User Defined Router!")
@@ -33,7 +33,7 @@ Senciro.get("/json") do req::Senciro.Request
 end
 
 Senciro.get("/user/:id") do req::Senciro.Request
-    id = get(req.params, "id", "unknown")
+    id = Base.get(req.params, "id", "unknown")
     return Senciro.json(Dict("user_id" => id))
 end
 

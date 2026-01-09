@@ -3,17 +3,12 @@ module Middlewares
 using Dates
 using ..Types
 
-export Middleware, Logger
-
-# Helper to chain middleware
-# Middleware is a function: (Handler) -> Handler
-# Handler is: (Request) -> Response
+export Logger
 
 function Logger(next::Function)
     return function (req::Request)
         start_time = now()
 
-        # Call next handler
         res = next(req)
 
         end_time = now()
